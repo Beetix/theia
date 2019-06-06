@@ -27,7 +27,6 @@ import { Git, GitPath, GitWatcher, GitWatcherPath, GitWatcherServer, GitWatcherS
 import { GitContribution } from './git-contribution';
 import { bindGitDiffModule } from './diff/git-diff-frontend-module';
 import { bindGitHistoryModule } from './history/git-history-frontend-module';
-import { GitCommands } from './git-commands';
 import { GitResourceResolver } from './git-resource';
 import { GitRepositoryProvider } from './git-repository-provider';
 import { GitQuickOpenService } from './git-quick-open-service';
@@ -45,6 +44,7 @@ import '../../src/browser/style/index.css';
 import { ScmTitleCommandsContribution } from '@theia/scm/lib/browser/scm-title-command-registry';
 import { ScmResourceCommandContribution } from '@theia/scm/lib/browser/scm-resource-command-registry';
 import { ScmGroupCommandContribution } from '@theia/scm/lib/browser/scm-group-command-registry';
+import { GitScmProvider } from './git-scm-provider';
 
 export default new ContainerModule(bind => {
     bindGitPreferences(bind);
@@ -67,11 +67,10 @@ export default new ContainerModule(bind => {
     bind(ScmResourceCommandContribution).toService(GitContribution);
     bind(ScmGroupCommandContribution).toService(GitContribution);
 
-    bind(GitCommands).toSelf().inSingletonScope();
-
     bind(GitResourceResolver).toSelf().inSingletonScope();
     bind(ResourceResolver).toService(GitResourceResolver);
 
+    bind(GitScmProvider.Factory).toFactory(GitScmProvider.createFactory);
     bind(GitRepositoryProvider).toSelf().inSingletonScope();
     bind(GitQuickOpenService).toSelf().inSingletonScope();
 

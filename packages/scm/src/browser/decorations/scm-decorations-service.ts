@@ -57,7 +57,7 @@ export class ScmDecorationsService {
                 }
             }
         }));
-        this.scmService.onDidChangeSelectedRepositories(() => {
+        this.scmService.onDidChangeSelectedRepository(() => {
             const editor = this.editorManager.currentEditor;
             if (editor) {
                 this.applyEditorDecorations(editor.editor);

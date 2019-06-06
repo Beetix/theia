@@ -87,14 +87,7 @@ export class ScmAmendComponent extends React.Component<ScmAmendComponentProps, S
         this.setState({ amendingCommits: await this.buildAmendingList(lastCommit ? lastCommit.commit : undefined), lastCommit });
 
         this.toDisposeOnUnmount.push(
-            this.props.repository.provider.onDidChange(async event => {
-                this.fetchStatusAndSetState();
-            })
-        );
-        this.toDisposeOnUnmount.push(
-            this.props.repository.provider.onDidChangeResources(async event => {
-                this.fetchStatusAndSetState();
-            })
+            this.props.repository.provider.onDidChange(() => this.fetchStatusAndSetState())
         );
     }
 
@@ -330,10 +323,10 @@ export class ScmAmendComponent extends React.Component<ScmAmendComponentProps, S
 
     protected renderAmendCommitListButtons(): React.ReactNode {
         return <div className='scm-change-list-buttons-container'>
-            <a className='toolbar-button' title='Unamend All Commits' onClick={this.unamendAll.bind(this)}>
+            <a className='toolbar-button' title='Unamend All Commits' onClick={this.unamendAll}>
                 <i className='fa fa-minus' />
             </a>
-            <a className='toolbar-button' title='Clear Amending Commits' onClick={this.clearAmending.bind(this)}>
+            <a className='toolbar-button' title='Clear Amending Commits' onClick={this.clearAmending}>
                 <i className='fa fa-times' />
             </a>
         </div>;
@@ -350,7 +343,7 @@ export class ScmAmendComponent extends React.Component<ScmAmendComponentProps, S
             {
                 canAmend
                     ? <div className={ScmAmendComponent.Styles.FLEX_CENTER}>
-                        <button className='theia-button' title='Amend last commit' onClick={this.amend.bind(this)}>
+                        <button className='theia-button' title='Amend last commit' onClick={this.amend}>
                             Amend
                         </button>
                     </div>
@@ -426,7 +419,7 @@ export class ScmAmendComponent extends React.Component<ScmAmendComponentProps, S
                 {
                     isOldestAmendCommit
                         ? <div className={ScmAmendComponent.Styles.FLEX_CENTER}>
-                            <button className='theia-button' title='Unamend commit' onClick={() => this.unamend.bind(this)()}>
+                            <button className='theia-button' title='Unamend commit' onClick={this.unamend}>
                                 Unamend
                         </button>
                         </div>

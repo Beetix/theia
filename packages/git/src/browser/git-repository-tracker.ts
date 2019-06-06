@@ -20,7 +20,6 @@ import { Event, Emitter, DisposableCollection } from '@theia/core';
 import { GitRepositoryProvider } from './git-repository-provider';
 import { GitWatcher, GitStatusChangeEvent } from '../common/git-watcher';
 import URI from '@theia/core/lib/common/uri';
-import { ScmService } from '@theia/scm/lib/browser';
 
 /**
  * The repository tracker watches the selected repository for status changes. It provides a convenient way to listen on status updates.
@@ -36,27 +35,22 @@ export class GitRepositoryTracker {
         @inject(Git) protected readonly git: Git,
         @inject(GitRepositoryProvider) protected readonly repositoryProvider: GitRepositoryProvider,
         @inject(GitWatcher) protected readonly gitWatcher: GitWatcher,
-        @inject(ScmService) protected readonly scmService: ScmService
     ) { }
 
     @postConstruct()
     protected async init() {
-        this.scmService.onDidChangeSelectedRepositories(async repository => {
+        this.repositoryProvider.onDidChangeRepository(async repository => {
             this.workingDirectoryStatus = undefined;
             this.toDispose.dispose();
-            if (repository && repository.provider.contextValue === 'Git') {
-                const gitRepository = { localUri: repository.provider.rootUri };
-                this.toDispose.push(await this.gitWatcher.watchGitChanges(gitRepository));
+            if (repository) {
+                this.toDispose.push(await this.gitWatcher.watchGitChanges(repository));
                 this.toDispose.push(this.gitWatcher.onGitEvent((event: GitStatusChangeEvent) => {
                     this.workingDirectoryStatus = event.status;
                     this.onGitEventEmitter.fire(event);
                 }));
-                this.workingDirectoryStatus = await this.git.status(gitRepository);
+                this.workingDirectoryStatus = await this.git.status(repository);
             }
         });
-        if (this.scmService.repositories.length === 0) {
-            await this.repositoryProvider.refresh();
-        }
         if (this.selectedRepository) {
             this.workingDirectoryStatus = await this.git.status(this.selectedRepository);
         }
@@ -81,6 +75,13 @@ export class GitRepositoryTracker {
      */
     get selectedRepositoryStatus(): WorkingDirectoryStatus | undefined {
         return this.workingDirectoryStatus;
+    }
+
+    /**
+     * Emits when the selected repository has changed.
+     */
+    get onDidChangeRepository(): Event<Repository | undefined> {
+        return this.repositoryProvider.onDidChangeRepository;
     }
 
     /**

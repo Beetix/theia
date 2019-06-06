@@ -68,7 +68,6 @@ describe('GitRepositoryProvider', () => {
     let mockStorageService: StorageService;
 
     let gitRepositoryProvider: GitRepositoryProvider;
-    let scmService: ScmService;
     const mockRootChangeEmitter: Emitter<FileStat[]> = new Emitter();
     const mockFileChangeEmitter: Emitter<FileChange[]> = new Emitter();
 
@@ -108,7 +107,6 @@ describe('GitRepositoryProvider', () => {
         sinon.stub(mockWorkspaceService, 'roots').value(Promise.resolve());
         (<sinon.SinonStub>mockWorkspaceService.tryGetRoots).returns(roots);
         gitRepositoryProvider = testContainer.get<GitRepositoryProvider>(GitRepositoryProvider);
-        scmService = testContainer.get<ScmService>(ScmService);
         (<sinon.SinonStub>mockFilesystem.exists).resolves(true);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderA.uri, {}).resolves(allRepos);
 
@@ -132,20 +130,19 @@ describe('GitRepositoryProvider', () => {
         stubWsRoots.onCall(1).returns(oldRoots);
         stubWsRoots.onCall(2).returns(newRoots);
         gitRepositoryProvider = testContainer.get<GitRepositoryProvider>(GitRepositoryProvider);
-        scmService = testContainer.get<ScmService>(ScmService);
         (<sinon.SinonStub>mockFilesystem.exists).resolves(true);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderA.uri, {}).resolves(allReposA);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderB.uri, {}).resolves(allReposB);
 
         let counter = 0;
-        scmService.onDidAddRepository(selected => {
+        gitRepositoryProvider.onDidChangeRepository(selected => {
             counter++;
             if (counter === 3) {
                 expect(gitRepositoryProvider.allRepositories.length).to.eq(allReposA.concat(allReposB).length);
                 expect(gitRepositoryProvider.allRepositories[0].localUri).to.eq(allReposA[0].localUri);
                 expect(gitRepositoryProvider.allRepositories[1].localUri).to.eq(allReposA[1].localUri);
                 expect(gitRepositoryProvider.allRepositories[2].localUri).to.eq(allReposB[0].localUri);
-                expect(selected && selected.provider.rootUri).to.eq(allReposB[0].localUri);
+                expect(selected && selected.localUri).to.eq(allReposA[0].localUri);
                 done();
             }
         });
@@ -169,20 +166,19 @@ describe('GitRepositoryProvider', () => {
         stubWsRoots.onCall(1).returns(oldRoots);
         stubWsRoots.onCall(2).returns(newRoots);
         gitRepositoryProvider = testContainer.get<GitRepositoryProvider>(GitRepositoryProvider);
-        scmService = testContainer.get<ScmService>(ScmService);
         (<sinon.SinonStub>mockFilesystem.exists).resolves(true);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderA.uri, {}).resolves(allReposA);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderB.uri, {}).resolves(allReposB);
 
         let counter = 0;
-        scmService.onDidAddRepository(selected => {
+        gitRepositoryProvider.onDidChangeRepository(selected => {
             counter++;
             if (counter === 3) {
                 expect(gitRepositoryProvider.allRepositories.length).to.eq(allReposA.concat(allReposB).length);
                 expect(gitRepositoryProvider.allRepositories[0].localUri).to.eq(allReposA[0].localUri);
                 expect(gitRepositoryProvider.allRepositories[1].localUri).to.eq(allReposA[1].localUri);
                 expect(gitRepositoryProvider.allRepositories[2].localUri).to.eq(allReposB[0].localUri);
-                expect(selected && selected.provider.rootUri).to.eq(allReposB[0].localUri);
+                expect(selected && selected.localUri).to.eq(allReposA[0].localUri);
                 done();
             }
         });

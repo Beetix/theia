@@ -13,77 +13,50 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-import { injectable, inject, postConstruct } from 'inversify';
-import { Message } from '@phosphor/messaging';
-import {
-    ApplicationShell,
-    ContextMenuRenderer,
-    SELECTED_CLASS,
-    StatefulWidget,
-    StorageService
-} from '@theia/core/lib/browser';
+
 import * as React from 'react';
+import { Message } from '@phosphor/messaging';
+import { ElementExt } from '@phosphor/domutils';
+import { injectable, inject, postConstruct } from 'inversify';
+import { ApplicationShell, ContextMenuRenderer, SELECTED_CLASS, StorageService, ReactWidget, Key } from '@theia/core/lib/browser';
 import { AlertMessage } from '@theia/core/lib/browser/widgets/alert-message';
-import {
-    InputValidation,
-    InputValidator,
-    ScmInput,
-    ScmRepository,
-    ScmResource,
-    ScmResourceGroup,
-    ScmService,
-    ScmAmendSupport
-} from './scm-service';
-import { CommandRegistry, Emitter, MenuPath } from '@theia/core';
-import { Event as CoreEvent } from '@theia/core';
+import { ScmInput, ScmRepository, ScmResource, ScmResourceGroup, ScmService } from './scm-service';
+import { CommandRegistry, MenuPath } from '@theia/core';
+import { DisposableCollection, Disposable } from '@theia/core/lib/common/disposable';
 import { ScmAvatarService } from './scm-avatar-service';
 import { ScmTitleCommandRegistry, ScmTitleItem } from './scm-title-command-registry';
-import { ScmResourceCommandRegistry } from './scm-resource-command-registry';
-import { ScmResourceItem as ResourceItem} from './scm-resource-command-registry';
+import { ScmResourceCommandRegistry, ScmResourceItem } from './scm-resource-command-registry';
 import { ScmGroupCommandRegistry, ScmGroupItem } from './scm-group-command-registry';
-import { ScmNavigableListWidget } from './scm-navigable-list-widget';
 import { ScmAmendComponent } from './scm-amend-component';
-import { KeyboardEvent } from 'react';
 
 @injectable()
-export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements StatefulWidget {
+export class ScmWidget extends ReactWidget {
     private static MESSAGE_BOX_MIN_HEIGHT = 25;
     private static LABEL = 'Source Control';
 
-    protected message: string = '';
     protected messageBoxHeight: number = ScmWidget.MESSAGE_BOX_MIN_HEIGHT;
-    protected inputCommandMessageValidator: InputValidator | undefined;
-    protected inputCommandMessageValidation: InputValidation | undefined;
-    protected listContainer: ScmResourceGroupsContainer | undefined;
-
-    private selectedRepoUri: string | undefined;
-    private onUpdateEmitter: Emitter<void> = new Emitter();
-    protected readonly selectChange = (change: ScmResource) => {
-        const repository = this.scmService.selectedRepository;
-        if (repository) {
-            const resources: ScmResource[] = [];
-            const groups = repository.provider.groups;
-            if (groups) {
-                groups.forEach(group => group.resources.forEach(resource => resources.push(resource)));
-                this.scmNodes = resources;
-            }
-        }
-        this.selectNode(change);
-    }
-    protected readonly handleEnter: () => void;
 
     @inject(ScmTitleCommandRegistry) protected readonly scmTitleRegistry: ScmTitleCommandRegistry;
     @inject(ScmResourceCommandRegistry) protected readonly scmResourceCommandRegistry: ScmResourceCommandRegistry;
     @inject(ScmGroupCommandRegistry) protected readonly scmGroupCommandRegistry: ScmGroupCommandRegistry;
     @inject(ScmService) private readonly scmService: ScmService;
-    @inject(CommandRegistry) private readonly commandRegistry: CommandRegistry;
+    @inject(CommandRegistry) private readonly commands: CommandRegistry;
     @inject(ApplicationShell) protected readonly shell: ApplicationShell;
     @inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer;
     @inject(ScmAvatarService) protected readonly avatarService: ScmAvatarService;
     @inject(StorageService) protected readonly storageService: StorageService;
 
+    private _scrollContainer: string;
+    protected set scrollContainer(id: string) {
+        this._scrollContainer = id + Date.now();
+    }
+    protected get scrollContainer(): string {
+        return this._scrollContainer;
+    }
+
     constructor() {
         super();
+        this.node.tabIndex = 0;
         this.id = 'theia-scmContainer';
         this.addClass('theia-scm');
         this.scrollContainer = ScmWidget.Styles.GROUPS_CONTAINER;
@@ -92,84 +65,63 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
         this.title.label = ScmWidget.LABEL;
         this.title.caption = ScmWidget.LABEL;
         this.title.closable = true;
-
-        this.update();
     }
 
     @postConstruct()
-    protected init() {
-        const changeHandler = (repository: ScmRepository) => {
-            repository.provider.onDidChangeResources(() => {
-                if (this.scmService.selectedRepository === repository) {
-                    this.update();
-                }
-            });
-            repository.provider.onDidChange(() => {
-                this.update();
-            });
-        };
-        this.scmService.repositories.forEach(repository => {
-            changeHandler(repository);
-        });
-        this.scmService.onDidAddRepository(repository => {
-            changeHandler(repository);
-        });
-        this.scmService.onDidChangeSelectedRepositories(repository => {
-            if (repository) {
-                this.selectedRepoUri = repository.provider.rootUri;
-                this.title.label = ScmWidget.LABEL + ': ' + repository.provider.contextValue;
-            } else {
-                this.title.label = ScmWidget.LABEL;
-                this.selectedRepoUri = undefined;
-            }
-            const area = this.shell.getAreaFor(this);
-            if (area === 'left') {
-                this.shell.leftPanelHandler.refresh();
-            } else if (area === 'right') {
-                this.shell.rightPanelHandler.refresh();
-            }
-            this.update();
-        });
+    protected init(): void {
+        this.refresh();
+        this.toDispose.push(this.scmService.onDidChangeSelectedRepository(() => this.refresh()));
     }
 
-    protected onAfterDetach(msg: Message) {
-        this.scmService.repositories.forEach(repository => repository.provider.dispose());
-        super.onAfterDetach(msg);
+    protected readonly toDisposeOnRefresh = new DisposableCollection();
+    protected refresh(): void {
+        this.toDisposeOnRefresh.dispose();
+        this.toDispose.push(this.toDisposeOnRefresh);
+        const repository = this.scmService.selectedRepository;
+        this.title.label = ScmWidget.LABEL;
+        if (repository) {
+            this.title.label += ': ' + repository.provider.contextValue;
+        }
+        const area = this.shell.getAreaFor(this);
+        if (area === 'left') {
+            this.shell.leftPanelHandler.refresh();
+        } else if (area === 'right') {
+            this.shell.rightPanelHandler.refresh();
+        }
+        this.update();
+        if (repository) {
+            this.toDisposeOnRefresh.push(repository.onDidChange(() => this.update()));
+        }
     }
 
-    get onUpdate(): CoreEvent<void> {
-        return this.onUpdateEmitter.event;
+    protected onActivateRequest(msg: Message): void {
+        super.onActivateRequest(msg);
+        this.update();
+        this.node.focus();
     }
+
     protected onUpdateRequest(msg: Message): void {
+        if (!this.isAttached || !this.isVisible) {
+            return;
+        }
+        this.onRender.push(Disposable.create(() => async () => {
+            const selected = this.node.getElementsByClassName(SELECTED_CLASS)[0];
+            if (selected) {
+                ElementExt.scrollIntoViewIfNeeded(this.node, selected);
+            }
+        }));
         super.onUpdateRequest(msg);
-        this.onUpdateEmitter.fire(undefined);
     }
 
-    protected addScmListKeyListeners = (id: string) => this.doAddScmListKeyListeners(id);
-    protected doAddScmListKeyListeners(id: string) {
+    protected addScmListKeyListeners = (id: string) => {
         const container = document.getElementById(id);
         if (container) {
             this.addScmListNavigationKeyListeners(container);
         }
     }
 
-    protected handleListEnter() {
-        const selected = this.getSelected();
-        if (selected) {
-            const items = this.scmResourceCommandRegistry.getItems(selected.group.label);
-            if (items && items.length > 0) {
-                this.commandRegistry.executeCommand(items[0].command, selected.sourceUri.toString());
-            }
-        }
-    }
-
     protected render(): React.ReactNode {
-        let repository;
-        if (this.selectedRepoUri) {
-            repository = this.scmService.repositories.find(repo => repo.provider.rootUri === this.selectedRepoUri);
-        } else {
-            repository = this.scmService.selectedRepository;
-        }
+        const repository = this.scmService.selectedRepository;
         if (!repository) {
             return <AlertMessage
                 type='WARNING'
@@ -177,9 +129,7 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
             />;
         }
         const input = repository.input;
-        this.inputCommandMessageValidator = input.validateInput;
-
-        const amendSupport: ScmAmendSupport | undefined = repository.provider.amendSupport;
+        const amendSupport = repository.provider.amendSupport;
 
         return <div className={ScmWidget.Styles.MAIN_CONTAINER}>
             <div className='headerContainer' style={{ flexGrow: 0 }}>
@@ -192,32 +142,26 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
                 repository={repository}
                 scmResourceCommandRegistry={this.scmResourceCommandRegistry}
                 scmGroupCommandRegistry={this.scmGroupCommandRegistry}
-                commandRegistry={this.commandRegistry}
-                selectChange={this.selectChange}
-                scmNodes={this.scmNodes}
+                commands={this.commands}
                 addScmListKeyListeners={this.addScmListKeyListeners}
                 renderContextMenu={this.showMoreToolButtons}
             />
-            {
-                amendSupport
-                    ? <ScmAmendComponent
-                        key={`amend:${repository.provider.rootUri}`}
-                        style={{ flexGrow: 0 }}
-                        id={this.scrollContainer}
-                        repository={repository}
-                        scmAmendSupport={amendSupport}
-                        setCommitMessage={this.setInputMessages}
-                        avatarService={this.avatarService}
-                        storageService={this.storageService}
-                    />
-                    : ''
-            }
+            {amendSupport && <ScmAmendComponent
+                key={`amend:${repository.provider.rootUri}`}
+                style={{ flexGrow: 0 }}
+                id={this.scrollContainer}
+                repository={repository}
+                scmAmendSupport={amendSupport}
+                setCommitMessage={this.setInputValue}
+                avatarService={this.avatarService}
+                storageService={this.storageService}
+            />}
         </div>;
     }
 
     protected renderInput(input: ScmInput, repository: ScmRepository): React.ReactNode {
-        const validationStatus = this.inputCommandMessageValidation ? this.inputCommandMessageValidation.type : 'idle';
-        const validationMessage = this.inputCommandMessageValidation ? this.inputCommandMessageValidation.message : '';
+        const validationStatus = input.issue ? input.issue.type : 'idle';
+        const validationMessage = input.issue ? input.issue.message : '';
         const keyBinding = navigator.appVersion.indexOf('Mac') !== -1 ? 'Cmd+Enter' : 'Ctrl+Enter';
         // tslint:disable-next-line:no-any
         const format = (value: string, ...args: string[]): string => {
@@ -230,14 +174,6 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
             return value;
         };
         const message = format(input.placeholder, keyBinding);
-        const handleHotKey = (event: KeyboardEvent) => {
-            if (event.key === 'Enter' && event.ctrlKey) {
-                const command = repository.provider.acceptInputCommand;
-                if (command) {
-                    this.executeInputCommand(command.id, repository.provider.handle);
-                }
-            }
-        };
         return <div className={ScmWidget.Styles.INPUT_MESSAGE_CONTAINER}>
             <textarea
                 className={`${ScmWidget.Styles.INPUT_MESSAGE} theia-scm-input-message-${validationStatus}`}
@@ -246,11 +182,11 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
                     overflow: this.messageBoxHeight > ScmWidget.MESSAGE_BOX_MIN_HEIGHT ? 'auto' : 'hidden'
                 }}
                 autoFocus={true}
-                onInput={this.onInputMessageChange.bind(this)}
-                placeholder={`${message}`}
+                onInput={this.setInputValue}
+                placeholder={message}
                 id={ScmWidget.Styles.INPUT_MESSAGE}
-                defaultValue={`${input.value}`}
-                onKeyPress={handleHotKey}
+                defaultValue={input.value}
+                onKeyPress={this.executeInputCommand}
                 tabIndex={1}>
             </textarea>
             <div
@@ -258,53 +194,28 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
                     `${ScmWidget.Styles.VALIDATION_MESSAGE} ${ScmWidget.Styles.NO_SELECT}
                     theia-scm-validation-message-${validationStatus} theia-scm-input-message-${validationStatus}`
                 }
-                style={
-                    {
-                        display: !!this.inputCommandMessageValidation ? 'block' : 'none'
-                    }
-                }>{validationMessage}</div>
+                style={{
+                    display: !!input.issue ? 'block' : 'none'
+                }}>{validationMessage}</div>
         </div>;
     }
 
-    public get messageInput(): HTMLTextAreaElement {
-        return document.getElementById(ScmWidget.Styles.INPUT_MESSAGE) as HTMLTextAreaElement;
-    }
-
-    protected onInputMessageChange(e: Event): void {
-        const { target } = e;
-        if (target instanceof HTMLTextAreaElement) {
-            const { value } = target;
-            this.message = value;
-            const repository = this.scmService.selectedRepository;
-            const equal = (left: InputValidation | undefined, right: InputValidation | undefined): boolean => {
-                if (left && right) {
-                    return left.message === right.message && left.type === right.type;
-                }
-                return left === right;
-            };
-            if (repository) {
-                repository.input.value = value;
-            }
-            this.resize(target);
-            if (this.inputCommandMessageValidator) {
-                this.inputCommandMessageValidator(value).then(result => {
-                    if (!equal(this.inputCommandMessageValidation, result)) {
-                        this.inputCommandMessageValidation = result;
-                        this.update();
-                    }
-                });
-            }
+    protected setInputValue = (event: React.FormEvent<HTMLTextAreaElement> | string) => {
+        const repository = this.scmService.selectedRepository;
+        if (repository) {
+            repository.input.value = typeof event === 'string' ? event : event.currentTarget.value;
+        }
+        if (typeof event !== 'string') {
+            this.resize(event.currentTarget);
         }
     }
 
     protected renderCommandBar(repository: ScmRepository | undefined): React.ReactNode {
-        const onClick = (event: React.MouseEvent<HTMLElement>) => {
-            this.showMoreToolButtons(event, undefined);
-        };
+        const { commands, scmService } = this;
         return <div id='commandBar' className='flexcontainer'>
             <div className='buttons'>
-                {this.scmTitleRegistry.getItems().map(command => this.renderButton(command))}
-                <a className='toolbar-button' title='More...' onClick={onClick}>
+                {this.scmTitleRegistry.getItems().map(item => <ScmTitleItemComponent {...{ item, commands, scmService }} />)}
+                <a className='toolbar-button' title='More...' onClick={this.showMoreToolButtons}>
                     <i className='fa fa-ellipsis-h' />
                 </a>
             </div>
@@ -313,86 +224,54 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
         </div>;
     }
 
-    protected readonly showMoreToolButtons = (event: React.MouseEvent<HTMLElement>, group: string[] | undefined) => this.doShowMoreToolButtons(event, group);
-
-    protected doShowMoreToolButtons(event: React.MouseEvent<HTMLElement>, group: string[] | undefined) {
-        const el = (event.target as HTMLElement).parentElement;
-        if (el) {
-            this.contextMenuRenderer.render(group ? group : ScmWidget.ContextMenu.PATH, {
-                x: el.getBoundingClientRect().left,
-                y: el.getBoundingClientRect().top + el.offsetHeight
+    protected showMoreToolButtons = (event: React.MouseEvent<HTMLElement>, group?: string[]) => {
+        const parent = event.currentTarget.parentElement;
+        if (parent) {
+            const rect = parent.getBoundingClientRect();
+            this.contextMenuRenderer.render(group || ScmWidget.ContextMenu.PATH, {
+                x: rect.left,
+                y: rect.top + parent.offsetHeight
             });
         }
     }
 
-    protected renderButton(item: ScmTitleItem): React.ReactNode {
-        const command = this.commandRegistry.getCommand(item.command);
-        if (item.when) {
-            const provider = item.when.substring(item.when.indexOf('scmProvider == ') + 15);
-            const repository = this.scmService.selectedRepository;
-            if (repository) {
-                if (provider.toLowerCase() !== repository.provider.label.toLowerCase()) {
-                    return;
-                }
-            }
-        }
-        if (command) {
-            if (item.group && item.group === 'navigation') {
-                const execute = () => {
-                    this.commandRegistry.executeCommand(item.command);
-                };
-                return <a className='toolbar-button' key={command.id}>
-                    <i className={command.iconClass} title={command.label} onClick={execute} />
-                </a>;
-            }
-        }
-    }
-
     protected renderInputCommand(repository: ScmRepository | undefined): React.ReactNode {
-        if (repository && repository.provider.acceptInputCommand) {
-            const command = repository.provider.acceptInputCommand;
-            return <div className='buttons'>
-                <button className='theia-button'
-                    onClick={() => {
-                        this.executeInputCommand(command.id, repository.provider.handle);
-                    }} title={`${command.tooltip}`}>
-                    {`${repository.provider.acceptInputCommand.text}`}
-                </button>
-            </div>;
-        }
+        const command = repository && repository.provider.acceptInputCommand;
+        return command && <div className='buttons'>
+            <button className='theia-button' onClick={this.executeInputCommand} title={command.tooltip}>
+                {command.text}
+            </button>
+        </div>;
     }
 
-    protected executeInputCommand(commandId: string, providerId: number): void {
-        this.inputCommandMessageValidation = undefined;
-        if (this.message.trim().length === 0) {
-            this.inputCommandMessageValidation = {
+    protected executeInputCommand = async (event: React.KeyboardEvent | React.MouseEvent) => {
+        if ('key' in event && !(event.key === 'Enter' && event.ctrlKey)) {
+            return;
+        }
+        const repository = this.scmService.selectedRepository;
+        if (!repository) {
+            return;
+        }
+        const command = repository.provider.acceptInputCommand;
+        if (!command) {
+            return;
+        }
+        repository.input.issue = undefined;
+        if (!repository.input.value.trim()) {
+            repository.input.issue = {
                 type: 'error',
                 message: 'Please provide an input'
             };
         }
-        if (this.inputCommandMessageValidation === undefined) {
-            this.commandRegistry.executeCommand(commandId, providerId);
-            this.doSetInputMessages('');
-            this.update();
+        if (!repository.input.issue) {
+            await this.commands.executeCommand(command.id, repository.provider.handle);
+            repository.input.value = '';
         } else {
-            const messageInput = this.messageInput;
-            if (messageInput) {
-                this.update();
-                messageInput.focus();
-            }
+            repository.input.focus();
         }
     }
 
-    protected readonly setInputMessages = (message: string) => this.doSetInputMessages(message);
-
-    protected doSetInputMessages(message: string): void {
-        this.message = message;
-        const messageInput = this.messageInput;
-        messageInput.value = message;
-        this.resize(messageInput);
-    }
-
-    resize(textArea: HTMLTextAreaElement): void {
+    protected resize(textArea: HTMLTextAreaElement): void {
         // tslint:disable-next-line:no-null-keyword
         const fontSize = Number.parseInt(window.getComputedStyle(textArea, undefined).getPropertyValue('font-size').split('px')[0] || '0', 10);
         const { value } = textArea;
@@ -420,23 +299,49 @@ export class ScmWidget extends ScmNavigableListWidget<ScmResource> implements St
         }
     }
 
-    // tslint:disable-next-line:no-any
-    restoreState(oldState: any): void {
-        this.selectedRepoUri = oldState.selectedRepoUri;
-        const repository = this.scmService.repositories.find(repo => repo.provider.rootUri === this.selectedRepoUri);
-        if (repository) {
-            // repository.setSelected(true);
-            this.scmService.selectedRepository = repository;
-            this.message = oldState.message;
+    protected addScmListNavigationKeyListeners(container: HTMLElement): void {
+        this.addKeyListener(container, Key.ARROW_LEFT, () => this.navigateLeft());
+        this.addKeyListener(container, Key.ARROW_RIGHT, () => this.navigateRight());
+        this.addKeyListener(container, Key.ARROW_UP, () => this.selectPreviousResource());
+        this.addKeyListener(container, Key.ARROW_DOWN, () => this.selectNextResource());
+        this.addKeyListener(container, Key.ENTER, () => this.handleEnter());
+    }
+
+    protected navigateLeft(): void {
+        const resource = this.selectPreviousResource();
+        if (resource) {
+            resource.open();
         }
     }
 
-    storeState(): object {
-        return {
-            selectedRepoUri: this.selectedRepoUri,
-            message: this.message
-        };
+    protected navigateRight(): void {
+        const resource = this.selectNextResource();
+        if (resource) {
+            resource.open();
+        }
     }
+
+    protected selectPreviousResource(): ScmResource | undefined {
+        const repository = this.scmService.selectedRepository;
+        return repository && repository.selectPreviousResource();
+    }
+
+    protected selectNextResource(): ScmResource | undefined {
+        const repository = this.scmService.selectedRepository;
+        return repository && repository.selectNextResource();
+    }
+
+    protected handleEnter(): void {
+        const repository = this.scmService.selectedRepository;
+        const resource = repository && repository.selectedResource;
+        if (resource) {
+            const items = this.scmResourceCommandRegistry.getItems(resource.group.label);
+            if (items && items.length > 0) {
+                this.commands.executeCommand(items[0].command, resource.sourceUri.toString());
+            }
+        }
+    }
+
 }
 
 export namespace ScmWidget {
@@ -461,7 +366,50 @@ export namespace ScmWidget {
     }
 }
 
-export namespace ScmResourceItem {
+export class ScmResourceComponent extends React.Component<ScmResourceComponent.Props> {
+    render() {
+        const { name, path, icon, letter, color } = this.props;
+        const style = {
+            color
+        };
+        const tooltip = this.props.resource.decorations ? this.props.resource.decorations.tooltip : '';
+        return <div className={`scmItem ${ScmWidget.Styles.NO_SELECT}${this.props.resource.selected ? ' ' + SELECTED_CLASS : ''}`}
+            onContextMenu={this.renderContextMenu}>
+            <div className='noWrapInfo' onDoubleClick={this.open} onClick={this.selectChange}>
+                <span className={icon + ' file-icon'} />
+                <span className='name'>{name}</span>
+                <span className='path'>{path}</span>
+            </div>
+            <div className='itemButtonsContainer'>
+                {this.renderScmItemButtons()}
+                <div title={tooltip} className='status' style={style}>
+                    {letter}
+                </div>
+            </div>
+        </div>;
+    }
+
+    protected open = async () => {
+        await this.props.resource.open();
+    }
+
+    protected readonly selectChange = () => this.props.selectChange(this.props.resource);
+
+    protected renderContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+        event.preventDefault();
+        this.props.renderContextMenu(event, ['scm-resource-context-menu_' + this.props.groupId]);
+    }
+
+    protected renderScmItemButtons(): React.ReactNode {
+        const { resource, commands, scmResourceCommandRegistry, groupId } = this.props;
+        const items = scmResourceCommandRegistry.getItems(groupId);
+        return items && <div className='buttons'>
+            {items.map(item => <ResourceItemComponent {...{ item, resource, commands }} />)}
+        </div>;
+    }
+
+}
+export namespace ScmResourceComponent {
     export interface Props {
         name: string,
         path: string,
@@ -472,71 +420,39 @@ export namespace ScmResourceItem {
         groupLabel: string,
         groupId: string,
         scmResourceCommandRegistry: ScmResourceCommandRegistry,
-        commandRegistry: CommandRegistry,
-        open: () => Promise<void>,
+        commands: CommandRegistry,
         selectChange: (change: ScmResource) => void,
         renderContextMenu: (event: React.MouseEvent<HTMLElement>, group: string[]) => void
     }
 }
 
-class ScmResourceItem extends React.Component<ScmResourceItem.Props> {
-    protected readonly selectChange = () => this.props.selectChange(this.props.resource);
+export class ScmResourceGroupsContainer extends React.Component<ScmResourceGroupsContainer.Props> {
     render() {
-        const { name, path, icon, letter, color, open } = this.props;
-        const style = {
-            color
-        };
-        const renderContextMenu = (event: React.MouseEvent<HTMLElement>) => {
-            event.preventDefault();
-            this.props.renderContextMenu(event, ['scm-resource-context-menu_' + this.props.groupId]);
-        };
-        const tooltip = this.props.resource.decorations ? this.props.resource.decorations.tooltip : '';
-        return <div className={`scmItem ${ScmWidget.Styles.NO_SELECT}${this.props.resource.selected ? ' ' + SELECTED_CLASS : ''}`}
-            onContextMenu={renderContextMenu}>
-            <div className='noWrapInfo' onDoubleClick={open} onClick={this.selectChange}>
-                <span className={icon + ' file-icon'} />
-                <span className='name'>{name}</span>
-                <span className='path'>{path}</span>
-            </div>
-            <div className='itemButtonsContainer'>
-                {this.renderScmItemButtons()}
-                <div title={`${tooltip}`} className={'status'} style={style}>
-                    {letter}
-                </div>
-            </div>
+        const { groups } = this.props.repository.provider;
+        return <div className={ScmWidget.Styles.GROUPS_CONTAINER} style={this.props.style} id={this.props.id} tabIndex={2}>
+            {groups && this.props.repository.provider.groups.map(group => this.renderGroup(group))}
         </div>;
     }
 
-    protected renderScmItemButtons(): React.ReactNode {
-        const items = this.props.scmResourceCommandRegistry.getItems(this.props.groupId);
-        if (items) {
-            return <div className='buttons'>
-                {items.map(item => this.renderScmItemButton(item))}
-            </div>;
-        }
+    protected renderGroup(group: ScmResourceGroup): React.ReactNode {
+        return group.resources.length && <ScmResourceGroupContainer
+            group={group}
+            key={group.id}
+            scmResourceCommandRegistry={this.props.scmResourceCommandRegistry}
+            scmGroupCommandRegistry={this.props.scmGroupCommandRegistry}
+            selectChange={this.selectChange}
+            renderContextMenu={this.props.renderContextMenu}
+            commands={this.props.commands} />;
     }
 
-    protected renderScmItemButton(item: ResourceItem): React.ReactNode {
-        const command = this.props.commandRegistry.getCommand(item.command);
-        if (command) {
-            const execute = () => {
-                const resource = this.props.resource;
-                const arg = {
-                    id: 3,
-                    handle: resource.handle,
-                    groupHandle: resource.groupHandle,
-                    sourceControlHandle: resource.sourceControlHandle,
-                    uri: this.props.resource.sourceUri.toString()
-                };
-                this.props.commandRegistry.executeCommand(item.command, arg);
-            };
-            return <div className='toolbar-button' key={command.id}>
-                <a className={command.iconClass} title={command.label} onClick={execute} />
-            </div>;
-        }
+    protected selectChange = (resource: ScmResource) => {
+        this.props.repository.selectedResource = resource;
+    }
+
+    componentDidMount() {
+        this.props.addScmListKeyListeners(this.props.id);
     }
 }
-
 export namespace ScmResourceGroupsContainer {
     export interface Props {
         id: string,
@@ -544,141 +460,167 @@ export namespace ScmResourceGroupsContainer {
         repository: ScmRepository,
         scmResourceCommandRegistry: ScmResourceCommandRegistry,
         scmGroupCommandRegistry: ScmGroupCommandRegistry,
-        commandRegistry: CommandRegistry,
-        selectChange: (change: ScmResource) => void,
-        addScmListKeyListeners: (id: string) => void,
-        scmNodes: ScmResource[],
+        commands: CommandRegistry
+        addScmListKeyListeners: (id: string) => void
         renderContextMenu: (event: React.MouseEvent<HTMLElement>, group: string[] | undefined) => void
     }
 }
 
-class ScmResourceGroupsContainer extends React.Component<ScmResourceGroupsContainer.Props> {
-    render() {
-        return (
-            <div className={ScmWidget.Styles.GROUPS_CONTAINER} style={this.props.style} id={this.props.id} tabIndex={2}>
-                {this.props.repository.provider.groups ? this.props.repository.provider.groups.map(group => this.renderGroup(group)) : undefined}
-            </div>
-        );
-    }
-
-    protected renderGroup(group: ScmResourceGroup): React.ReactNode {
-        if (group.resources.length > 0) {
-            return <ScmResourceGroupContainer
-                group={group}
-                key={group.id}
-                scmResourceCommandRegistry={this.props.scmResourceCommandRegistry}
-                scmGroupCommandRegistry={this.props.scmGroupCommandRegistry}
-                selectChange={this.props.selectChange}
-                scmNodes={this.props.scmNodes}
-                renderContextMenu={this.props.renderContextMenu}
-                commandRegistry={this.props.commandRegistry} />;
-        }
-    }
-    componentDidMount() {
-        this.props.addScmListKeyListeners(this.props.id);
-    }
-}
-
-namespace ScmResourceGroupContainer {
-    export interface Props {
-        group: ScmResourceGroup,
-        scmNodes: ScmResource[],
-        scmResourceCommandRegistry: ScmResourceCommandRegistry
-        scmGroupCommandRegistry: ScmGroupCommandRegistry
-        commandRegistry: CommandRegistry;
-        selectChange: (change: ScmResource) => void
-        renderContextMenu: (event: React.MouseEvent<HTMLElement>, group: string[]) => void
-    }
-}
-
-class ScmResourceGroupContainer extends React.Component<ScmResourceGroupContainer.Props> {
+export class ScmResourceGroupContainer extends React.Component<ScmResourceGroupContainer.Props> {
     render() {
         const group = this.props.group;
-        const renderContextMenu = (event: React.MouseEvent<HTMLElement>) => {
-            event.preventDefault();
-            this.props.renderContextMenu(event, ['scm-group-context-menu_' + group.id]);
-        };
-        return <div className={'changesContainer'} key={`${group.id}`}>
-            <div className='theia-header scm-theia-header' onContextMenu={renderContextMenu}>
-                <div className='noWrapInfo'>{`${group.label}`}</div>
+        return <div className='changesContainer' key={group.id}>
+            <div className='theia-header scm-theia-header' onContextMenu={this.showContextMenu}>
+                <div className='noWrapInfo'>{group.label}</div>
                 {this.renderGroupButtons()}
-                {this.renderChangeCount(group.resources.length)}
+                {this.renderChangeCount()}
             </div>
-            <div>{group.resources.map(resource => this.renderScmResourceItem(this.props.scmNodes, resource, group.provider.rootUri))}</div>
+            <div>{group.resources.map(resource => this.renderScmResourceItem(resource))}</div>
         </div>;
     }
 
-    protected renderChangeCount(changes: number | undefined): React.ReactNode {
-        if (changes) {
-            return <div className='notification-count-container scm-change-count'>
-                <span className='notification-count'>{changes}</span>
-            </div>;
-        }
+    protected showContextMenu = (event: React.MouseEvent<HTMLElement>) => {
+        event.preventDefault();
+        this.props.renderContextMenu(event, ['scm-group-context-menu_' + this.props.group.id]);
+    }
+
+    protected renderChangeCount(): React.ReactNode {
+        const changeCount = this.props.group.resources.length;
+        return changeCount && <div className='notification-count-container scm-change-count'>
+            <span className='notification-count'>{changeCount}</span>
+        </div>;
     }
 
     protected renderGroupButtons(): React.ReactNode {
-        const items = this.props.scmGroupCommandRegistry.getItems(this.props.group.id);
-        if (items) {
-            return <div className='scm-change-list-buttons-container'>
-                {items.map(item => this.renderGroupButton(item))}
-            </div>;
-        }
+        const { group, commands } = this.props;
+        const items = this.props.scmGroupCommandRegistry.getItems(group.id);
+        return items && <div className='scm-change-list-buttons-container'>
+            {items.map(item => <ScmGroupItemComponent {...{ item, group, commands }} />)}
+        </div>;
     }
 
-    protected renderGroupButton(item: ScmGroupItem): React.ReactNode {
-        const command = this.props.commandRegistry.getCommand(item.command);
-        if (command) {
-            if (item.group && item.group === 'inline') {
-                const execute = () => {
-                    const group = this.props.group;
-                    const arg = {
-                        id: 2,
-                        groupHandle: group.handle,
-                        sourceControlHandle: group.sourceControlHandle
-                    };
-                    this.props.commandRegistry.executeCommand(item.command, arg);
-                };
-                return <a className='toolbar-button' key={command.id}>
-                    <i className={command.iconClass} title={command.label} onClick={execute} />
-                </a>;
-            }
-        }
-    }
-
-    protected renderScmResourceItem(scmNodes: ScmResource[], resource: ScmResource, repoUri: string | undefined): React.ReactNode {
+    protected renderScmResourceItem(resource: ScmResource): React.ReactNode {
+        const repoUri = resource.group.provider.rootUri;
         if (!repoUri) {
             return undefined;
-        }
-        const open = () => {
-            resource.open();
-            return Promise.resolve(undefined);
-        };
-        if (scmNodes) {
-            const res = scmNodes.find(node => node.sourceUri.toString() === resource.sourceUri.toString() &&
-                ((node.group && resource.group) ? node.group.label === resource.group.label : true));
-            if (res) {
-                resource = res;
-            }
         }
         const decorations = resource.decorations;
         const uri = resource.sourceUri.path.toString();
         const project = repoUri.substring(repoUri.lastIndexOf('/') + 1);
         const name = uri.substring(uri.lastIndexOf('/') + 1) + ' ';
+        // TODO use LabelProvider instead
         const path = uri.substring(uri.lastIndexOf(project) + project.length + 1, uri.lastIndexOf('/'));
-        return <ScmResourceItem key={`${resource.sourceUri}`}
+        return <ScmResourceComponent key={`${resource.sourceUri}`}
             name={name}
             path={path.length > 1 ? path : ''}
             icon={(decorations && decorations.icon) ? decorations.icon : ''}
             color={(decorations && decorations.color) ? decorations.color : ''}
             letter={(decorations && decorations.letter) ? decorations.letter : ''}
             resource={resource}
-            open={open}
             groupLabel={this.props.group.label}
             groupId={this.props.group.id}
-            commandRegistry={this.props.commandRegistry}
+            commands={this.props.commands}
             scmResourceCommandRegistry={this.props.scmResourceCommandRegistry}
             selectChange={this.props.selectChange}
             renderContextMenu={this.props.renderContextMenu}
         />;
+    }
+}
+export namespace ScmResourceGroupContainer {
+    export interface Props {
+        group: ScmResourceGroup
+        scmResourceCommandRegistry: ScmResourceCommandRegistry
+        scmGroupCommandRegistry: ScmGroupCommandRegistry
+        commands: CommandRegistry;
+        selectChange: (change: ScmResource) => void
+        renderContextMenu: (event: React.MouseEvent<HTMLElement>, group: string[]) => void
+    }
+}
+
+export class ScmTitleItemComponent extends React.Component<ScmTitleItemComponent.Props> {
+
+    render(): React.ReactNode {
+        const { item, commands } = this.props;
+        const command = commands.getCommand(item.command);
+        return command && this.when() && item.group && item.group === 'navigation' && <a className='toolbar-button' key={command.id}>
+            <i className={command.iconClass} title={command.label} onClick={this.execute} />
+        </a>;
+    }
+
+    protected when(): boolean {
+        const { item, scmService } = this.props;
+        if (!item.when) {
+            return true;
+        }
+        // TODO replace with `scmProvider` key and with proper evaluation
+        const provider = item.when.substring(item.when.indexOf('scmProvider == ') + 'scmProvider == '.length).trim();
+        const repository = scmService.selectedRepository;
+        return !!repository && provider.toLowerCase() === repository.provider.label.toLowerCase();
+    }
+
+    protected execute = () => this.props.commands.executeCommand(this.props.item.command);
+
+}
+export namespace ScmTitleItemComponent {
+    export interface Props {
+        item: ScmTitleItem;
+        scmService: ScmService;
+        commands: CommandRegistry;
+    }
+}
+
+export class ScmGroupItemComponent extends React.Component<ScmGroupItemComponent.Props> {
+    render(): React.ReactNode {
+        const { item, commands } = this.props;
+        const command = commands.getCommand(item.command);
+        return command && item.group && item.group === 'inline' && <a className='toolbar-button' key={command.id}>
+            <i className={command.iconClass} title={command.label} onClick={this.execute} />
+        </a>;
+    }
+
+    protected execute = () => {
+        const { item, group, commands } = this.props;
+        commands.executeCommand(item.command, {
+            id: 2,
+            groupHandle: group.handle,
+            sourceControlHandle: group.sourceControlHandle
+        });
+    }
+
+}
+export namespace ScmGroupItemComponent {
+    export interface Props {
+        item: ScmGroupItem;
+        group: ScmResourceGroup;
+        commands: CommandRegistry;
+    }
+}
+
+export class ResourceItemComponent extends React.Component<ResourceItemComponent.Props> {
+    render(): React.ReactNode {
+        const { item, commands } = this.props;
+        const command = commands.getCommand(item.command);
+        return command && <div className='toolbar-button' key={command.id}>
+            <a className={command.iconClass} title={command.label} onClick={this.execute} />
+        </div>;
+    }
+
+    protected execute = () => {
+        const { item, resource, commands } = this.props;
+        commands.executeCommand(item.command, {
+            id: 3,
+            handle: resource.handle,
+            groupHandle: resource.groupHandle,
+            sourceControlHandle: resource.sourceControlHandle,
+            uri: resource.sourceUri.toString()
+        });
+    }
+
+}
+export namespace ResourceItemComponent {
+    export interface Props {
+        item: ScmResourceItem;
+        resource: ScmResource;
+        commands: CommandRegistry;
     }
 }

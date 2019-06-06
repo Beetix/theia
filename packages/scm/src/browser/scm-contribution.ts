@@ -67,6 +67,7 @@ export class ScmContribution extends AbstractViewContribution<ScmWidget> impleme
         };
 
         const refresh = (commands: ScmCommand[]) => {
+            const toRemove = new Set(this.statusBarCommands);
             this.statusBarCommands = [CHANGE_REPOSITORY.id];
             commands.forEach(command => {
                 this.statusBarCommands.push(command.id);
@@ -79,6 +80,7 @@ export class ScmContribution extends AbstractViewContribution<ScmWidget> impleme
                 };
                 this.statusBar.setElement(command.id, statusBaCommand);
             });
+            toRemove.forEach(id => this.statusBar.removeElement(id));
         };
         this.scmService.onDidAddRepository(repository => {
             const onDidChangeStatusBarCommands = repository.provider.onDidChangeStatusBarCommands;
@@ -87,18 +89,12 @@ export class ScmContribution extends AbstractViewContribution<ScmWidget> impleme
             }
         });
 
-        this.scmService.onDidRemoveRepository(() => {
-            this.scmService.selectedRepository = this.scmService.repositories[0];
-        });
-
         this.commandRegistry.registerCommand(CHANGE_REPOSITORY, {
-            execute: () => {
-                this.scmQuickOpenService.changeRepository();
-            }
+            execute: () => this.scmQuickOpenService.changeRepository()
         });
         this.scmService.onDidRemoveRepository(() => handle(this.scmService.selectedRepository));
         this.scmService.onDidAddRepository(() => handle(this.scmService.selectedRepository));
-        this.scmService.onDidChangeSelectedRepositories(repository => handle(repository));
+        this.scmService.onDidChangeSelectedRepository(repository => handle(repository));
         const handle = (repository: ScmRepository | undefined) => {
             if (repository) {
                 if (this.scmService.repositories.length === 1) {
@@ -119,9 +115,5 @@ export class ScmContribution extends AbstractViewContribution<ScmWidget> impleme
                 });
             }
         };
-    }
-
-    onStop(app: FrontendApplication): void {
-        this.scmService.dispose();
     }
 }
